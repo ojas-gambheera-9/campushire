@@ -1,0 +1,7 @@
+aws_region     = "ap-south-1"
+node_count     = 2
+instance_type  = "t3.small"
+ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
+ssh_cidr       = "0.0.0.0/0"
+ses_from_email = "you@example.com"
+alarm_email    = "you@example.com"

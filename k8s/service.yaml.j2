@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: campushire-api
+  namespace: {{ app_namespace }}
+spec:
+  type: NodePort          # the ALB target group forwards to this port on every node
+  selector: { app: campushire-api }
+  ports:
+    - port: 80
+      targetPort: 8080
+      nodePort: {{ node_port }}

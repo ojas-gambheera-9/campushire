@@ -1,0 +1,200 @@
+name: CampusHire CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # GitHub OIDC -> AWS (no stored AWS keys)
+  contents: read
+
+concurrency:
+  group: campushire-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  TF_DIR: infra/terraform
+  TF_VAR_aws_region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  TF_VAR_ses_from_email: ${{ vars.SES_FROM_EMAIL }}
+  TF_VAR_alarm_email: ${{ vars.ALARM_EMAIL }}
+
+jobs:
+  # ───────────── 1. Build & test (fail-fast gate) ─────────────
+  test:
+    name: Build & test (Jest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+      - name: API tests
+        working-directory: backend
+        run: npm ci && npm test
+      - name: Frontend build check
+        working-directory: frontend
+        run: npm ci && npm run build
+
+  # ───────────── 2. Terraform: provision AWS ─────────────
+  infra:
+    name: Terraform (VPC, EC2, ALB, Cognito, S3, CloudFront…)
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      applied: ${{ steps.mode.outputs.apply }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+      - id: mode
+        run: echo "apply=${{ github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
+      - name: Derive SSH public key from the deploy key
+        run: |
+          install -m 600 /dev/null key
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > key
+          echo "TF_VAR_ssh_public_key=$(ssh-keygen -y -f key)" >> "$GITHUB_ENV"
+          rm key
+      - name: terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=campushire/prod.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true"
+      - run: terraform fmt -check -recursive
+        working-directory: ${{ env.TF_DIR }}
+      - run: terraform validate
+        working-directory: ${{ env.TF_DIR }}
+      - name: terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -input=false -out=tfplan
+      - name: terraform apply
+        if: steps.mode.outputs.apply == 'true'
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -auto-approve tfplan
+      - name: Export outputs
+        if: steps.mode.outputs.apply == 'true'
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform output -json > "$GITHUB_WORKSPACE/tf.json"
+      - uses: actions/upload-artifact@v4
+        if: steps.mode.outputs.apply == 'true'
+        with:
+          name: tf-outputs
+          path: tf.json
+
+  # ───────────── 3. Ansible: configure nodes (Docker + Kubernetes) ─────────────
+  configure:
+    name: Ansible (Docker, k3s, CloudWatch agent)
+    needs: infra
+    if: needs.infra.outputs.applied == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tf-outputs }
+      - name: Install Ansible
+        run: |
+          pip install --user ansible-core==2.17.*
+          ansible-galaxy collection install -r ansible/requirements.yml
+      - name: SSH key + inventory
+        run: |
+          install -m 600 /dev/null ~/deploy_key
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/deploy_key
+          scripts/gen_inventory.sh tf.json ~/deploy_key > ansible/inventory.ini
+      - name: Wait for SSH on new nodes
+        working-directory: ansible
+        run: ansible all -m wait_for_connection -a "timeout=300"
+      - name: Configure nodes
+        working-directory: ansible
+        run: ansible-playbook site.yml
+
+  # ───────────── 4. Docker build/push + Kubernetes rolling deploy ─────────────
+  deploy-api:
+    name: Docker → ECR → Kubernetes
+    needs: [infra, configure]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tf-outputs }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build & push image
+        id: img
+        run: |
+          REPO=$(jq -r .ecr_repository_url.value tf.json)
+          docker build -t "$REPO:${{ github.sha }}" -t "$REPO:latest" backend
+          docker push "$REPO:${{ github.sha }}"
+          docker push "$REPO:latest"
+          echo "image=$REPO:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Install Ansible
+        run: |
+          pip install --user ansible-core==2.17.*
+          ansible-galaxy collection install -r ansible/requirements.yml
+      - name: Roll out to Kubernetes
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+        run: |
+          install -m 600 /dev/null ~/deploy_key
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/deploy_key
+          scripts/gen_inventory.sh tf.json ~/deploy_key > ansible/inventory.ini
+          jq -n --slurpfile t tf.json --arg image "${{ steps.img.outputs.image }}" '{
+            image: $image,
+            aws_region: $t[0].region.value,
+            ecr_registry: ($t[0].ecr_repository_url.value | split("/")[0]),
+            cognito_user_pool_id: $t[0].cognito_user_pool_id.value,
+            cognito_client_id: $t[0].cognito_client_id.value,
+            resumes_bucket: $t[0].resumes_bucket.value,
+            ses_from_email: $t[0].ses_from_email.value,
+            site_url: $t[0].site_url.value,
+            mongodb_uri: "{{ lookup(\"env\", \"MONGODB_URI\") }}"
+          }' > ansible/extra-vars.json
+          cd ansible && ansible-playbook deploy.yml -e @extra-vars.json
+
+  # ───────────── 5. Frontend → S3 + CloudFront ─────────────
+  deploy-web:
+    name: React → S3 + CloudFront
+    needs: [infra, deploy-api]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tf-outputs }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Build SPA
+        working-directory: frontend
+        run: |
+          export VITE_COGNITO_USER_POOL_ID=$(jq -r .cognito_user_pool_id.value ../tf.json)
+          export VITE_COGNITO_CLIENT_ID=$(jq -r .cognito_client_id.value ../tf.json)
+          npm ci && npm run build
+      - name: Publish
+        run: |
+          BUCKET=$(jq -r .web_bucket.value tf.json)
+          aws s3 sync frontend/dist "s3://$BUCKET" --delete --cache-control "public,max-age=31536000,immutable" --exclude index.html
+          aws s3 cp frontend/dist/index.html "s3://$BUCKET/index.html" --cache-control "no-cache"
+          aws cloudfront create-invalidation --distribution-id "$(jq -r .cloudfront_distribution_id.value tf.json)" --paths "/index.html"
+          echo "### Live at $(jq -r .site_url.value tf.json)" >> "$GITHUB_STEP_SUMMARY"

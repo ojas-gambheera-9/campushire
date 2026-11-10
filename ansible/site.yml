@@ -1,0 +1,21 @@
+---
+# Bootstrap every EC2 node identically: Docker + Kubernetes (k3s) + CloudWatch agent.
+- name: Base configuration on all nodes
+  hosts: k8s
+  become: true
+  roles:
+    - common
+    - docker
+    - cloudwatch_agent
+
+- name: Kubernetes control plane
+  hosts: k8s_server
+  become: true
+  roles:
+    - k3s_server
+
+- name: Kubernetes workers
+  hosts: k8s_agents
+  become: true
+  roles:
+    - k3s_agent

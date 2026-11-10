@@ -1,0 +1,30 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [curl, ca-certificates, jq, unzip, awscli, chrony, htop]
+    state: present
+
+- name: Ensure time sync is running
+  ansible.builtin.service:
+    name: chrony
+    state: started
+    enabled: true
+
+- name: Load kernel modules needed by Kubernetes networking
+  community.general.modprobe:
+    name: "{{ item }}"
+    persistent: present
+  loop: [overlay, br_netfilter]
+
+- name: Kernel networking sysctls
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    sysctl_file: /etc/sysctl.d/99-k8s.conf
+    reload: true
+  loop: [net.ipv4.ip_forward, net.bridge.bridge-nf-call-iptables]

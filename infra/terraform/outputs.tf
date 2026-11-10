@@ -1,0 +1,17 @@
+output "region" { value = var.aws_region }
+output "site_url" { value = "https://${aws_cloudfront_distribution.web.domain_name}" }
+output "cloudfront_distribution_id" { value = aws_cloudfront_distribution.web.id }
+output "web_bucket" { value = aws_s3_bucket.web.id }
+output "resumes_bucket" { value = aws_s3_bucket.resumes.id }
+output "alb_dns_name" { value = aws_lb.main.dns_name }
+output "ecr_repository_url" { value = aws_ecr_repository.api.repository_url }
+output "cognito_user_pool_id" { value = aws_cognito_user_pool.main.id }
+output "cognito_client_id" { value = aws_cognito_user_pool_client.web.id }
+output "ses_from_email" { value = var.ses_from_email }
+output "app_log_group" { value = aws_cloudwatch_log_group.app.name }
+output "system_log_group" { value = aws_cloudwatch_log_group.system.name }
+output "dashboard_name" { value = aws_cloudwatch_dashboard.main.dashboard_name }
+output "server_public_ip" { value = aws_eip.node[0].public_ip }
+output "server_private_ip" { value = aws_instance.node[0].private_ip }
+output "agent_public_ips" { value = slice(aws_eip.node[*].public_ip, 1, var.node_count) }
+output "node_public_ips" { value = aws_eip.node[*].public_ip }

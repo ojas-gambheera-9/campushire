@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+*.tfstate*
+.terraform
+ansible/inventory.ini
+ansible/extra-vars.json
+tf.json

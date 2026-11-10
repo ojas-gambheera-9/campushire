@@ -1,0 +1,17 @@
+---
+- name: Install Docker engine
+  ansible.builtin.apt:
+    name: docker.io
+    state: present
+
+- name: Enable and start Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Allow the ubuntu user to run docker
+  ansible.builtin.user:
+    name: ubuntu
+    groups: docker
+    append: true

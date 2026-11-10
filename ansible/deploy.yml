@@ -1,0 +1,7 @@
+---
+# Roll the API out to the cluster (runs kubectl on the control-plane node, so port 6443 is never exposed).
+- name: Deploy CampusHire API
+  hosts: k8s_server
+  become: true
+  roles:
+    - app_deploy

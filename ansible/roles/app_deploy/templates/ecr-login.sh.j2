@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Refreshes the "ecr-creds" imagePullSecret using the node's IAM instance role.
+set -euo pipefail
+REGISTRY="{{ ecr_registry }}"
+TOKEN=$(aws ecr get-login-password --region {{ aws_region }})
+k3s kubectl -n {{ app_namespace }} create secret docker-registry ecr-creds \
+  --docker-server="$REGISTRY" --docker-username=AWS --docker-password="$TOKEN" \
+  --dry-run=client -o yaml | k3s kubectl apply -f -

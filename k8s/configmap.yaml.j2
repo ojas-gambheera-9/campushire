@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: campushire-config
+  namespace: {{ app_namespace }}
+data:
+  NODE_ENV: "production"
+  PORT: "8080"
+  AWS_REGION: "{{ aws_region }}"
+  COGNITO_USER_POOL_ID: "{{ cognito_user_pool_id }}"
+  COGNITO_CLIENT_ID: "{{ cognito_client_id }}"
+  S3_BUCKET: "{{ resumes_bucket }}"
+  SES_FROM_EMAIL: "{{ ses_from_email }}"
+  CORS_ORIGIN: "{{ site_url }}"
