@@ -4,22 +4,32 @@
     url: "{{ cloudwatch_agent_url }}"
     dest: /tmp/amazon-cloudwatch-agent.deb
     mode: "0644"
-  register: cwa_pkg
 
 - name: Install CloudWatch agent
   ansible.builtin.apt:
     deb: /tmp/amazon-cloudwatch-agent.deb
-  when: cwa_pkg.changed or not ansible_check_mode
 
-- name: Write agent configuration
+- name: Ensure config directory exists
+  ansible.builtin.file:
+    path: /etc/campushire
+    state: directory
+    mode: "0755"
+
+- name: Write agent configuration (kept outside the agent's own folder)
   ansible.builtin.template:
     src: config.json.j2
-    dest: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+    dest: /etc/campushire/cloudwatch-agent.json
     mode: "0644"
-  notify: Restart CloudWatch agent
+  register: cwa_config
 
-- name: Enable and start CloudWatch agent with that configuration
+- name: Load configuration into the agent (only when it changed)
   ansible.builtin.command: >
     /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
-    -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
-  changed_when: false
+    -a fetch-config -m ec2 -c file:/etc/campushire/cloudwatch-agent.json -s
+  when: cwa_config.changed
+
+- name: Make sure the agent is running and starts on boot
+  ansible.builtin.service:
+    name: amazon-cloudwatch-agent
+    state: started
+    enabled: true
