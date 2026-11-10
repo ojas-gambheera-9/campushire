@@ -21,6 +21,11 @@ variable "github_repo" {
   type        = string
   description = "owner/repo that is allowed to assume the deploy role, e.g. srikar/campushire"
 }
+variable "extra_sub_patterns" {
+  type        = list(string)
+  default     = []
+  description = "Additional OIDC subject patterns (GitHub now embeds numeric IDs in the sub claim)"
+}
 variable "create_oidc_provider" {
   type        = bool
   default     = true
@@ -78,7 +83,7 @@ resource "aws_iam_role" "github_deploy" {
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = { "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com" }
-        StringLike   = { "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:*" }
+        StringLike   = { "token.actions.githubusercontent.com:sub" = concat(["repo:${var.github_repo}:*"], var.extra_sub_patterns) }
       }
     }]
   })
