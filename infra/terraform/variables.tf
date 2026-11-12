@@ -66,7 +66,7 @@ variable "enable_sonarqube" {
 }
 variable "sonar_instance_type" {
   type        = string
-  default     = "t3.medium"
+  default     = "m7i-flex.large"
   description = "SonarQube needs about 4 GB RAM (embedded Elasticsearch)."
 }
 variable "sonar_cidr" {
