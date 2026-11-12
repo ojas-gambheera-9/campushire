@@ -40,3 +40,41 @@ resource "aws_lb_listener" "http" {
     target_group_arn = aws_lb_target_group.api.arn
   }
 }
+
+# Grafana is served on the same ALB under /grafana (CloudFront forwards /grafana* here).
+resource "aws_lb_target_group" "grafana" {
+  name        = "${local.name}-grafana"
+  port        = var.grafana_node_port
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "instance"
+
+  health_check {
+    path                = "/grafana/api/health"
+    matcher             = "200"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    timeout             = 5
+  }
+  deregistration_delay = 30
+}
+
+resource "aws_lb_target_group_attachment" "grafana" {
+  count            = var.node_count
+  target_group_arn = aws_lb_target_group.grafana.arn
+  target_id        = aws_instance.node[count.index].id
+  port             = var.grafana_node_port
+}
+
+resource "aws_lb_listener_rule" "grafana" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 10
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.grafana.arn
+  }
+  condition {
+    path_pattern { values = ["/grafana", "/grafana/*"] }
+  }
+}

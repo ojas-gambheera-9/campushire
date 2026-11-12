@@ -1,12 +1,12 @@
 ---
-# Bootstrap every EC2 node identically: Docker + Kubernetes (k3s) + CloudWatch agent.
+# Bootstrap every EC2 node identically: Docker + Kubernetes (k3s).
+# Monitoring (Prometheus/Grafana) is deployed into the cluster by deploy.yml.
 - name: Base configuration on all nodes
   hosts: k8s
   become: true
   roles:
     - common
     - docker
-    - cloudwatch_agent
 
 - name: Kubernetes control plane
   hosts: k8s_server
@@ -19,3 +19,10 @@
   become: true
   roles:
     - k3s_agent
+
+# Only present in the inventory when enable_sonarqube = true.
+- name: SonarQube server
+  hosts: sonarqube
+  become: true
+  roles:
+    - sonarqube

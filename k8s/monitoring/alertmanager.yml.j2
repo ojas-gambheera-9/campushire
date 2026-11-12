@@ -1,0 +1,16 @@
+# Alertmanager publishes to the same SNS topic the old CloudWatch alarms used,
+# so alert emails keep arriving. Credentials come from the EC2 instance role (no keys).
+route:
+  receiver: sns
+  group_by: [alertname, instance]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: sns
+    sns_configs:
+      - topic_arn: "{{ alerts_topic_arn }}"
+        sigv4:
+          region: "{{ aws_region }}"
+        send_resolved: true

@@ -49,9 +49,28 @@ variable "ses_from_email" {
 variable "alarm_email" {
   type        = string
   default     = ""
-  description = "Email subscribed to CloudWatch alarm notifications (leave empty to skip)."
+  description = "Email subscribed to Alertmanager notifications via SNS (leave empty to skip)."
 }
 variable "node_port" {
   type    = number
   default = 30080
+}
+variable "grafana_node_port" {
+  type    = number
+  default = 30300
+}
+variable "enable_sonarqube" {
+  type        = bool
+  default     = true
+  description = "Create the dedicated SonarQube EC2 instance (about 33 USD/month). Set false to skip it and the CI quality gate."
+}
+variable "sonar_instance_type" {
+  type        = string
+  default     = "t3.medium"
+  description = "SonarQube needs about 4 GB RAM (embedded Elasticsearch)."
+}
+variable "sonar_cidr" {
+  type        = string
+  default     = "0.0.0.0/0"
+  description = "CIDR allowed to reach the SonarQube UI/API (9000). GitHub-hosted runners have no fixed IPs, so the login is the protection."
 }

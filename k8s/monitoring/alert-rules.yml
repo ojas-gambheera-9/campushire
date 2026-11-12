@@ -1,0 +1,73 @@
+groups:
+  - name: campushire-api
+    rules:
+      - alert: ApiDown
+        expr: up{job="campushire-api"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "API pod {{ $labels.pod }} is down"
+          description: "Prometheus cannot scrape {{ $labels.pod }} on {{ $labels.node }} for 2 minutes."
+
+      - alert: ApiNoTargets
+        expr: absent(up{job="campushire-api"})
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "No API pods are being scraped"
+          description: "The campushire-api job has no targets: the deployment may be down."
+
+      - alert: ApiHigh5xxRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 0.001) > 0.05
+          and sum(rate(http_requests_total{status=~"5.."}[5m])) > 0.02
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "More than 5% of API requests are failing (5xx)"
+          description: "5xx ratio is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: ApiHighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "API p95 latency above 1s"
+          description: "p95 latency is {{ $value | humanizeDuration }}."
+
+  - name: nodes
+    rules:
+      - alert: NodeHighCpu
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "High CPU on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | printf \"%.0f\" }}% for 10 minutes."
+
+      - alert: NodeLowMemory
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Low memory on {{ $labels.instance }}"
+          description: "Less than 10% of memory is available."
+
+      - alert: NodeDiskAlmostFull
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.15
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Disk almost full on {{ $labels.instance }}"
+          description: "Less than 15% of the root disk is free."
+
+      - alert: NodeExporterDown
+        expr: up{job="node-exporter"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Node {{ $labels.instance }} is not reporting"
+          description: "node-exporter on {{ $labels.instance }} has been unreachable for 5 minutes."

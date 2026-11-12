@@ -1,0 +1,72 @@
+---
+- name: Base packages
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    name: [curl, ca-certificates, jq, chrony, htop, docker.io]
+    state: present
+
+- name: Enable and start Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+# SonarQube's embedded Elasticsearch refuses to start without these kernel limits.
+- name: Kernel settings required by Elasticsearch
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-sonarqube.conf
+    reload: true
+  loop:
+    - { name: vm.max_map_count, value: "524288" }
+    - { name: fs.file-max, value: "131072" }
+
+- name: Compose directory
+  ansible.builtin.file:
+    path: /opt/sonarqube
+    state: directory
+    mode: "0750"
+
+- name: Database password (generated once, kept on the host)
+  ansible.builtin.shell: |
+    test -f /opt/sonarqube/.db_password || (umask 077; head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' > /opt/sonarqube/.db_password)
+  changed_when: false
+
+- name: Read database password
+  ansible.builtin.slurp:
+    src: /opt/sonarqube/.db_password
+  register: dbpw
+  no_log: true
+
+- name: Write compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/sonarqube/docker-compose.yml
+    mode: "0600"
+  vars:
+    db_password: "{{ dbpw.content | b64decode | trim }}"
+  no_log: true
+  notify: Restart SonarQube
+
+- name: Install compose plugin
+  ansible.builtin.apt:
+    name: docker-compose-v2
+    state: present
+  failed_when: false
+
+- name: Start SonarQube
+  ansible.builtin.command: docker compose up -d
+  args:
+    chdir: /opt/sonarqube
+  changed_when: true
+
+- name: Wait until SonarQube reports UP (first start takes 2-4 minutes)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:9000/api/system/status"
+    return_content: true
+  register: sq
+  retries: 40
+  delay: 10
+  until: sq.status == 200 and (sq.json.status | default('')) == 'UP'

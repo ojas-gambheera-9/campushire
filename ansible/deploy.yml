@@ -1,7 +1,9 @@
 ---
-# Roll the API out to the cluster (runs kubectl on the control-plane node, so port 6443 is never exposed).
-- name: Deploy CampusHire API
+# Roll the API out to the cluster (runs kubectl on the control-plane node, so port 6443 is never exposed),
+# then (re)deploy the Prometheus + Grafana monitoring stack.
+- name: Deploy CampusHire API and monitoring
   hosts: k8s_server
   become: true
   roles:
     - app_deploy
+    - monitoring_deploy

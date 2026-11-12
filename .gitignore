@@ -6,3 +6,4 @@ dist
 ansible/inventory.ini
 ansible/extra-vars.json
 tf.json
+coverage

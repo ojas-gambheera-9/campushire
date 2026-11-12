@@ -26,6 +26,11 @@ data "aws_iam_policy_document" "node_app" {
     resources = ["*"]
   }
   statement {
+    sid       = "PublishAlerts"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.alarms.arn]
+  }
+  statement {
     sid       = "EcrLogin"
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]
@@ -38,10 +43,6 @@ resource "aws_iam_role_policy" "node_app" {
   policy = data.aws_iam_policy_document.node_app.json
 }
 
-resource "aws_iam_role_policy_attachment" "cw_agent" {
-  role       = aws_iam_role.node.name
-  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
-}
 resource "aws_iam_role_policy_attachment" "ecr_read" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
@@ -54,4 +55,21 @@ resource "aws_iam_role_policy_attachment" "ssm" {
 resource "aws_iam_instance_profile" "node" {
   name = "${local.name}-node"
   role = aws_iam_role.node.name
+}
+
+# SonarQube host: no application permissions, only Systems Manager access.
+resource "aws_iam_role" "sonar" {
+  count              = var.enable_sonarqube ? 1 : 0
+  name               = "${local.name}-sonar"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+}
+resource "aws_iam_role_policy_attachment" "sonar_ssm" {
+  count      = var.enable_sonarqube ? 1 : 0
+  role       = aws_iam_role.sonar[0].name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+resource "aws_iam_instance_profile" "sonar" {
+  count = var.enable_sonarqube ? 1 : 0
+  name  = "${local.name}-sonar"
+  role  = aws_iam_role.sonar[0].name
 }

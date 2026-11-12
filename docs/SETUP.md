@@ -1,7 +1,7 @@
 # CampusHire — Setup Guide (AWS + Terraform + Ansible + Docker + Kubernetes)
 
 Everything is created by code. After the one-time bootstrap below, **every `git push` to `main`** runs:
-`test → terraform apply → ansible → docker build/push → kubernetes rolling deploy → S3/CloudFront publish`.
+`test (Jest + coverage) → terraform apply → ansible → SonarQube quality gate → docker build/push → kubernetes rolling deploy (+ Prometheus/Grafana) → S3/CloudFront publish`.
 If tests fail, nothing else runs.
 
 ## What you get
@@ -12,7 +12,8 @@ If tests fail, nothing else runs.
 | App | Express API as a Deployment (2–6 pods, HPA), NodePort 30080 behind the ALB |
 | Data | MongoDB Atlas (external), resumes in private S3 via pre-signed URLs |
 | Identity / email | Cognito user pool (custom `role` attribute), SES |
-| Observability | CloudWatch log groups, agent on every node, dashboard, 5xx/unhealthy/CPU alarms → SNS |
+| Observability | **Prometheus** (scrapes API `/metrics` + node-exporter), **Grafana** dashboard at `/grafana`, **Alertmanager** → SNS email |
+| Code quality | **SonarQube** on its own EC2 (t3.medium); CI fails if the quality gate fails |
 | Registry | ECR (nodes pull via an auto-refreshed pull secret) |
 
 > k3s is used as the Kubernetes distribution (single binary, runs well on 2 GB nodes). Everything else matches the deck.
@@ -43,7 +44,7 @@ Copy the `mongodb+srv://…/campushire` connection string.
 
 ## 4. GitHub settings (Settings → Secrets and variables → Actions)
 **Variables:** `AWS_ROLE_ARN` (from bootstrap), `TF_STATE_BUCKET`, `AWS_REGION` (`ap-south-1`), `SES_FROM_EMAIL` (an inbox you can open), `ALARM_EMAIL` (optional)
-**Secrets:** `SSH_PRIVATE_KEY` (contents of `~/.ssh/campushire`), `MONGODB_URI`
+**Secrets:** `SSH_PRIVATE_KEY` (contents of `~/.ssh/campushire`), `MONGODB_URI`, `GRAFANA_ADMIN_PASSWORD` (any strong password you choose; it is the Grafana `admin` login), `SONAR_TOKEN` (added after step 6.5; until then the quality gate is skipped with a warning)
 
 ## 5. Ship it
 ```bash
@@ -56,8 +57,11 @@ The run summary prints the live URL (`https://dxxxx.cloudfront.net`).
 ## 6. After the first run
 1. **SES:** open the verification email AWS sent to `SES_FROM_EMAIL` and click the link. New accounts are in the SES *sandbox*: you can only email verified addresses until you request production access (SES console → Account dashboard).
 2. **Atlas:** add the Elastic IPs (step 3).
-3. **Alarms:** confirm the SNS subscription email if you set `ALARM_EMAIL`.
+3. **Alerts:** confirm the SNS subscription email if you set `ALARM_EMAIL` (Alertmanager publishes to that topic).
 4. Open the site, sign up as a Recruiter (verification code arrives by email), post a job; sign up as a Student in another browser, apply with a PDF, then shortlist from the recruiter dashboard and watch the email arrive.
+
+5. **SonarQube (one-time):** open the `SonarQube:` URL from the run summary (`http://<sonar_ip>:9000`), log in as `admin` / `admin`, set a new password, then My Account → Security → generate a *User* token. Add it as the `SONAR_TOKEN` repository secret and re-run the workflow; the `sonar` job now enforces the quality gate.
+6. **Grafana:** open `https://<cloudfront>/grafana/`, log in as `admin` with `GRAFANA_ADMIN_PASSWORD`; the *CampusHire Overview* dashboard is under the CampusHire folder.
 
 ## Useful commands
 ```bash
@@ -66,7 +70,11 @@ sudo k3s kubectl -n campushire get pods,svc,hpa -o wide
 sudo k3s kubectl -n campushire logs deploy/campushire-api --tail=100
 sudo k3s kubectl -n campushire rollout undo deploy/campushire-api   # roll back
 ```
-CloudWatch → Dashboards → `campushire-prod`.
+```bash
+sudo k3s kubectl -n monitoring get pods                     # prometheus, alertmanager, grafana, node-exporter
+sudo k3s kubectl -n monitoring port-forward svc/prometheus 9090 --address 127.0.0.1   # then ssh -L 9090:localhost:9090
+```
+Metrics and dashboards: Grafana. Logs: `kubectl logs` (CloudWatch Logs were removed with the CloudWatch agent).
 
 ## Run locally
 ```bash
@@ -76,7 +84,7 @@ cd frontend && cp .env.example .env && npm ci && npm run dev    # proxies /api �
 ```
 
 ## Cost (approx., ap-south-1, running 24×7)
-2 × t3.small ≈ $30–35, ALB ≈ $18–20, public IPv4 addresses ≈ $10–12, logs/CloudFront/S3 a few dollars → **roughly $60–75/month**. Cut it with `node_count = 1` (≈ $40). Tear everything down with:
+2 × t3.small ≈ $30–35, SonarQube t3.medium ≈ $33 (+ its IP ≈ $4), ALB ≈ $18–20, public IPv4 addresses ≈ $10–12, CloudFront/S3 a few dollars → **roughly $95–115/month**. Cut it with `node_count = 1`, or `enable_sonarqube = false` (saves ≈ $37). Tear everything down with:
 `cd infra/terraform && terraform destroy` (then the bootstrap stack if you want it gone; empty the resumes bucket first).
 
 ## Known limitations (be upfront in your viva)

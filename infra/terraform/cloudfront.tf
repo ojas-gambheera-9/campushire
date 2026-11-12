@@ -70,6 +70,17 @@ resource "aws_cloudfront_distribution" "web" {
     origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_no_host.id
   }
 
+  # Grafana dashboards (login required) via the same ALB origin.
+  ordered_cache_behavior {
+    path_pattern             = "/grafana*"
+    target_origin_id         = "api"
+    viewer_protocol_policy   = "https-only"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = data.aws_cloudfront_cache_policy.disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_no_host.id
+  }
+
   restrictions {
     geo_restriction { restriction_type = "none" }
   }

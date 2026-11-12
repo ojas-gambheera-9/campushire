@@ -1,4 +1,4 @@
 k3s_version: "v1.31.4+k3s1"
-cloudwatch_agent_url: "https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb"
 app_namespace: campushire
 node_port: 30080
+grafana_node_port: 30300

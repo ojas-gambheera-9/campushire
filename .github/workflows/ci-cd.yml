@@ -25,7 +25,7 @@ env:
 jobs:
   # ───────────── 1. Build & test (fail-fast gate) ─────────────
   test:
-    name: Build & test (Jest)
+    name: Build & test (Jest + coverage)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,12 @@ jobs:
             frontend/package-lock.json
       - name: API tests
         working-directory: backend
-        run: npm ci && npm test
+        run: npm ci && npm run test:coverage
+      - name: Keep coverage for SonarQube
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: backend/coverage/lcov.info
       - name: Frontend build check
         working-directory: frontend
         run: npm ci && npm run build
@@ -99,7 +104,7 @@ jobs:
 
   # ───────────── 3. Ansible: configure nodes (Docker + Kubernetes) ─────────────
   configure:
-    name: Ansible (Docker, k3s, CloudWatch agent)
+    name: Ansible (Docker, k3s, SonarQube host)
     needs: infra
     if: needs.infra.outputs.applied == 'true'
     runs-on: ubuntu-latest
@@ -123,10 +128,49 @@ jobs:
         working-directory: ansible
         run: ansible-playbook site.yml
 
+  # ───────────── 3b. SonarQube quality gate ─────────────
+  sonar:
+    name: SonarQube quality gate
+    needs: [infra, configure]
+    if: needs.infra.outputs.applied == 'true'
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with: { name: tf-outputs }
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage
+          path: backend/coverage
+      - name: Make coverage paths relative to the repo root
+        run: sed -i 's#^SF:#SF:backend/#' backend/coverage/lcov.info
+      - name: Locate SonarQube
+        id: sq
+        run: |
+          echo "url=$(jq -r .sonar_url.value tf.json)" >> "$GITHUB_OUTPUT"
+          if [ -z "$SONAR_TOKEN" ] || [ "$(jq -r .sonar_enabled.value tf.json)" != "true" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Quality gate skipped: SONAR_TOKEN secret is not set yet (or SonarQube is disabled)."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: SonarQube scan (fails the build if the quality gate fails)
+        if: steps.sq.outputs.run == 'true'
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_HOST_URL: ${{ steps.sq.outputs.url }}
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
+
   # ───────────── 4. Docker build/push + Kubernetes rolling deploy ─────────────
   deploy-api:
-    name: Docker → ECR → Kubernetes
-    needs: [infra, configure]
+    name: Docker → ECR → Kubernetes + monitoring
+    needs: [infra, configure, sonar]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,7 +197,9 @@ jobs:
       - name: Roll out to Kubernetes
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
         run: |
+          test -n "$GRAFANA_ADMIN_PASSWORD" || { echo "::error::Add the GRAFANA_ADMIN_PASSWORD repository secret"; exit 1; }
           install -m 600 /dev/null ~/deploy_key
           printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/deploy_key
           scripts/gen_inventory.sh tf.json ~/deploy_key > ansible/inventory.ini
@@ -166,7 +212,10 @@ jobs:
             resumes_bucket: $t[0].resumes_bucket.value,
             ses_from_email: $t[0].ses_from_email.value,
             site_url: $t[0].site_url.value,
-            mongodb_uri: "{{ lookup(\"env\", \"MONGODB_URI\") }}"
+            alerts_topic_arn: $t[0].alerts_topic_arn.value,
+            grafana_node_port: $t[0].grafana_node_port.value,
+            mongodb_uri: "{{ lookup(\"env\", \"MONGODB_URI\") }}",
+            grafana_admin_password: "{{ lookup(\"env\", \"GRAFANA_ADMIN_PASSWORD\") }}"
           }' > ansible/extra-vars.json
           cd ansible && ansible-playbook deploy.yml -e @extra-vars.json
 
@@ -198,3 +247,5 @@ jobs:
           aws s3 cp frontend/dist/index.html "s3://$BUCKET/index.html" --cache-control "no-cache"
           aws cloudfront create-invalidation --distribution-id "$(jq -r .cloudfront_distribution_id.value tf.json)" --paths "/index.html"
           echo "### Live at $(jq -r .site_url.value tf.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Grafana: $(jq -r .grafana_url.value tf.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### SonarQube: $(jq -r .sonar_url.value tf.json)" >> "$GITHUB_STEP_SUMMARY"

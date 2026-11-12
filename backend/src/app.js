@@ -4,6 +4,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const config = require('./config');
 const { authenticate } = require('./middleware/auth');
+const { metricsMiddleware, metricsHandler } = require('./middleware/metrics');
 
 function createApp() {
   const app = express();
@@ -12,9 +13,14 @@ function createApp() {
   app.use(cors({ origin: config.corsOrigin }));
   app.use(express.json({ limit: '100kb' }));
   if (process.env.NODE_ENV !== 'test') app.use(morgan('combined'));
+  app.use(metricsMiddleware);
 
   // Used by the ALB target group + Kubernetes probes.
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+  // Scraped by Prometheus straight from the pod IP. Not reachable from the internet:
+  // CloudFront only forwards /api/* and /grafana*, and the ALB only accepts CloudFront.
+  app.get('/metrics', metricsHandler);
 
   // /api/me — the role comes from the verified Cognito token, never from the client.
   app.get('/api/me', authenticate, (req, res) => res.json(req.user));
